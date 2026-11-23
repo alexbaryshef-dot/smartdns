@@ -16,6 +16,8 @@ What is covered:
 What is NOT covered: a real smartdns/hrdns process, real DNS answers, aarch64,
 lighttpd and Keenetic. See docs/TEST-REPORT.md.
 """
+import hashlib
+import http.server
 import json
 import os
 import shutil
@@ -23,7 +25,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from functools import partial
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -340,6 +344,49 @@ def test_http(inst):
             proc.kill()
 
 
+def test_fork_core():
+    """Install the fork hrdns binary from a local feed with a real SHA-256 check."""
+    root = WORK / "forkcore"
+    if root.exists():
+        shutil.rmtree(root)
+    prefix = root / "opt"
+    (prefix / "etc").mkdir(parents=True)
+    (prefix / "var").mkdir(parents=True)
+    (WORK / "tmp").mkdir(parents=True, exist_ok=True)
+    feed = root / "feed"
+    (feed / "bin" / "aarch64-k3.10").mkdir(parents=True)
+    fake = feed / "bin" / "aarch64-k3.10" / "hrdns"
+    fake.write_text("#!/bin/sh\n"
+                    "if [ \"${1:-}\" = \"-v\" ]; then echo 'hrdns 1.0.0-fake'; exit 0; fi\n"
+                    "echo 'hrdns starting...(fake fork core)'\n"
+                    "i=0; while [ $i -lt 5 ]; do i=$((i+1)); sleep 1; done\n", encoding="utf-8")
+    fake.chmod(0o755)
+    (feed / "SHA256SUMS").write_text(
+        hashlib.sha256(fake.read_bytes()).hexdigest() + "  bin/aarch64-k3.10/hrdns\n", encoding="utf-8")
+    httpd = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(http.server.SimpleHTTPRequestHandler, directory=str(feed)))
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        env = base_env(prefix)
+        env["FORKSMDNS_ALLOW_NONROOT"] = "1"
+        env["FORKSMDNS_FORK_CORE_URL_BASE"] = f"http://127.0.0.1:{port}"
+        args = [PROJECT / "install.sh", "--source", str(PROJECT).replace("\\", "/"), "--prefix",
+                str(prefix).replace("\\", "/"), "--no-deps", "--no-start", "--no-autostart",
+                "--web-server", "busybox", "--fork-arch", "aarch64-k3.10",
+                "--ui-port", str(free_port()), "--dns-port", str(free_port())]
+        p = subprocess.run([BUSYBOX, "ash"] + [str(a) for a in args], capture_output=True,
+                           text=True, env=env, cwd=str(root), timeout=240)
+        inst = prefix / "etc" / "forksmartdns" / "instance.env"
+        core = prefix / "etc" / "forksmartdns" / "bin" / "core"
+        text = inst.read_text(encoding="utf-8") if inst.is_file() else ""
+        check("fork core: download+verify+install", p.returncode == 0, (p.returncode, p.stderr[-800:]))
+        check("fork core: binary installed", core.is_file())
+        check("fork core: source recorded", "FSD_CORE_SOURCE='fork'" in text and "1.0.0-fake" in text, text)
+    finally:
+        httpd.shutdown()
+
+
 def test_install():
     root = WORK / "instroot"
     if root.exists():
@@ -395,6 +442,7 @@ def main():
     inst = build_instance(WORK / "instance")
     test_api(inst)
     test_http(build_instance(WORK / "http-instance"))
+    test_fork_core()
     test_install()
     print("\nPASS=%d FAIL=%d" % (PASS, FAIL))
     return 0 if FAIL == 0 else 1

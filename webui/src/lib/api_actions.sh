@@ -76,8 +76,9 @@ api_status() {
 	respond_begin "200 OK"
 	printf '{"ok":true,"data":{'
 	printf '"service":%s,' "$(service_summary_json)"
-	printf '"instance":{"version":%s,"core_kind":%s,"core_binary":%s,"web_server":%s,' \
-		"$(json_str "$FSD_VERSION")" "$(json_str "$FSD_CORE_KIND")" "$(json_str "$FSD_CORE_BIN")" "$(json_str "$FSD_WEB_SERVER")"
+	printf '"instance":{"version":%s,"core_kind":%s,"core_binary":%s,"core_source":%s,"core_version":%s,"web_server":%s,' \
+		"$(json_str "$FSD_VERSION")" "$(json_str "$FSD_CORE_KIND")" "$(json_str "$FSD_CORE_BIN")" \
+		"$(json_str "${FSD_CORE_SOURCE:-}")" "$(json_str "${FSD_CORE_VERSION:-}")" "$(json_str "$FSD_WEB_SERVER")"
 	printf '"dns":{"port":%s,"bind":%s},' "$(json_int_or_null "$FSD_DNS_PORT")" "$(json_str "$FSD_DNS_BIND")"
 	printf '"ui":{"port":%s,"bind":%s,"internal_port":%s,"url":%s},' \
 		"$(json_int_or_null "$FSD_UI_PORT")" "$(json_str "$FSD_UI_BIND")" "$(json_int_or_null "$FSD_UI_INTERNAL_PORT")" \

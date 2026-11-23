@@ -622,7 +622,7 @@
 					'<div class="card"><div class="card-head"><h2>Экземпляр</h2></div>' +
 					'<dl class="kv">' +
 					'<dt>Версия WebUI</dt><dd>' + esc(s.instance.version) + '</dd>' +
-					'<dt>Ядро</dt><dd>' + esc(s.instance.core_kind) + ' · ' + esc(s.service.core_version || '—') + '</dd>' +
+					'<dt>Ядро</dt><dd>' + esc(s.instance.core_kind) + ' · ' + esc(s.service.core_version || '—') + (s.instance.core_source ? ' · ' + esc(s.instance.core_source) : '') + '</dd>' +
 					'<dt>DNS</dt><dd class="mono">' + esc(s.instance.dns.bind) + ':' + esc(s.instance.dns.port) + '</dd>' +
 					'<dt>Панель</dt><dd class="mono">' + esc(s.instance.ui.bind) + ':' + esc(s.instance.ui.port) + '</dd>' +
 					'<dt>Имя сервера</dt><dd>' + esc(ov.server_name || '—') + '</dd>' +
@@ -1758,7 +1758,7 @@
 				'<div class="card"><div class="card-head"><h2>Версии</h2></div><dl class="kv">' +
 				'<dt>WebUI</dt><dd>' + esc(about.ui_version) + '</dd>' +
 				'<dt>API</dt><dd>' + esc(about.api_version) + '</dd>' +
-				'<dt>Ядро</dt><dd>' + esc(about.core_version || '—') + ' (' + esc(about.core_kind) + ')</dd>' +
+				'<dt>Ядро</dt><dd>' + esc(about.core_version || '—') + ' (' + esc(about.core_kind) + ')' + (s.instance.core_source ? ' · ' + esc(s.instance.core_source) : '') + '</dd>' +
 				'<dt>Архитектура</dt><dd>' + esc(s.platform.arch) + ' · ' + esc(s.platform.kernel) + '</dd>' +
 				'<dt>Stats-мост</dt><dd>' + (s.bridge === 'up' ? badge('доступен', 'ok') : badge('недоступен', 'warn')) + '</dd>' +
 				'<dt>nftables</dt><dd>' + (s.platform.nft ? 'есть' : 'нет') + '</dd>' +
