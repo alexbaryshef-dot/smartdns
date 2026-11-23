@@ -36,6 +36,9 @@ UI_PORT=3636
 UI_BIND=0.0.0.0
 WEB_SERVER=auto
 CORE_PATH=""
+CORE_SOURCE=auto
+FORK_CORE_REF=${FORKSMDNS_FORK_CORE_REF:-fab7d126e4311e0441d4d29cf54a47b35de472c8}
+FORK_CORE_URL_BASE=${FORKSMDNS_FORK_CORE_URL_BASE:-}
 PASSWORD=""
 PASSWORD_STDIN=0
 NO_DEPS=0
@@ -66,6 +69,9 @@ forksmartdns WebUI — установка одной командой (Keenetic 
   --ui-bind ADDR      адрес панели (0.0.0.0)
   --web-server X      auto|lighttpd|busybox
   --core PATH         свой бинарник hrdns/smartdns
+  --core-source X     auto|existing|fork|opkg (по умолчанию auto)
+  --fork-core-ref REF коммит с готовыми бинарниками форка
+  --fork-arch ARCH    переопределить архитектуру (для тестов)
   --password PASS     сразу задать пароль администратора
   --no-deps           не устанавливать пакеты через opkg
   --no-start          не запускать службу
@@ -88,6 +94,9 @@ while [ $# -gt 0 ]; do
 		--ui-bind) UI_BIND=${2:?}; shift 2 ;;
 		--web-server) WEB_SERVER=${2:?}; shift 2 ;;
 		--core) CORE_PATH=${2:?}; shift 2 ;;
+		--core-source) CORE_SOURCE=${2:?}; shift 2 ;;
+		--fork-core-ref) FORK_CORE_REF=${2:?}; shift 2 ;;
+		--fork-arch) FORKSMDNS_FORK_ARCH=${2:?}; export FORKSMDNS_FORK_ARCH; shift 2 ;;
 		--password) PASSWORD=${2:?}; shift 2 ;;
 		--password-stdin) PASSWORD_STDIN=1; shift ;;
 		--no-deps) NO_DEPS=1; shift ;;
@@ -102,6 +111,13 @@ while [ $# -gt 0 ]; do
 		*) die "unknown option: $1 (try --help)" ;;
 	esac
 done
+case "$CORE_SOURCE" in
+	auto|existing|fork|opkg) ;;
+	*) die "--core-source: допустимо auto|existing|fork|opkg" ;;
+esac
+if [ -z "$FORK_CORE_URL_BASE" ]; then
+	FORK_CORE_URL_BASE="https://raw.githubusercontent.com/${FORKSMDNS_FORK_CORE_REPO:-alexbaryshef-dot/smartdns}/$FORK_CORE_REF"
+fi
 
 [ "$(id -u 2>/dev/null || echo 1)" = "0" ] || [ "${FORKSMDNS_ALLOW_NONROOT:-0}" = "1" ] || die "запускайте под root"
 PREFIX=$(printf '%s' "$PREFIX" | tr '\\' '/')
@@ -128,15 +144,16 @@ TMP="$PREFIX/tmp/forksmartdns-install.$$"
 TMP_FALLBACK="$PREFIX/var/lib/forksmartdns/.install.$$"
 
 fetch() {
-	# fetch URL DEST — try wget first, fall back to curl
+	# fetch URL DEST [TIMEOUT] — try wget first, fall back to curl
 	_url=$1
 	_dst=$2
+	_timeout=${3:-25}
 	if command -v wget >/dev/null 2>&1; then
-		wget -q -T 25 -O "$_dst" "$_url" 2>/dev/null && [ -s "$_dst" ] && return 0
+		wget -q -T "$_timeout" -O "$_dst" "$_url" 2>/dev/null && [ -s "$_dst" ] && return 0
 		: >"$_dst"
 	fi
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --connect-timeout 20 -o "$_dst" "$_url" 2>/dev/null && [ -s "$_dst" ] && return 0
+		curl -fsSL --connect-timeout 20 --max-time "$_timeout" -o "$_dst" "$_url" 2>/dev/null && [ -s "$_dst" ] && return 0
 	fi
 	return 1
 }
@@ -303,9 +320,26 @@ command -v nc >/dev/null 2>&1 || warn "nc не найден: страницы с
 command -v wget >/dev/null 2>&1 || command -v curl >/dev/null 2>&1 || warn "нет wget/curl"
 
 # --- core binary ------------------------------------------------------------
-find_core() {
-	for _c in "$PREFIX/bin/hrdns" "$PREFIX/sbin/hrdns" /opt/bin/hrdns /opt/sbin/hrdns \
-		"$PREFIX/bin/smartdns" "$PREFIX/sbin/smartdns" /opt/bin/smartdns /opt/sbin/smartdns; do
+# The fork has prebuilt hrdns binaries (1.0.0) for aarch64/mipsel/mips in git
+# history; newer 1.2.3/2.0.0 are published as source only. Unless a newer
+# hrdns is already installed, install the fork binary itself instead of
+# relying on a pre-existing Hydra Route package.
+find_hrdns() {
+	for _c in "$ETC/bin/core" "$PREFIX/bin/hrdns" "$PREFIX/sbin/hrdns" /opt/bin/hrdns /opt/sbin/hrdns; do
+		[ -x "$_c" ] || continue
+		_ver=$("$_c" -v 2>/dev/null | head -n 1)
+		case "$_ver" in
+			*hrdns*) ;;
+			*) continue ;;
+		esac
+		printf '%s' "$_c"
+		return 0
+	done
+	return 1
+}
+
+find_smartdns() {
+	for _c in "$PREFIX/bin/smartdns" "$PREFIX/sbin/smartdns" /opt/bin/smartdns /opt/sbin/smartdns; do
 		[ -x "$_c" ] || continue
 		"$_c" -v >/dev/null 2>&1 || continue
 		printf '%s' "$_c"
@@ -314,26 +348,98 @@ find_core() {
 	return 1
 }
 
+fork_arch() {
+	[ -n "${FORKSMDNS_FORK_ARCH:-}" ] && { printf '%s' "$FORKSMDNS_FORK_ARCH"; return 0; }
+	case "$(uname -m 2>/dev/null)" in
+		aarch64|arm64) printf 'aarch64-k3.10' ;;
+		mipsel|mipsle|4kec*) printf 'mipselsf-k3.4' ;;
+		mips) printf 'mipssf-k3.4' ;;
+		*) return 1 ;;
+	esac
+}
+
+FORK_CORE_DL=""
+download_fork_core() {
+	_arch=$(fork_arch 2>/dev/null) || {
+		warn "для $(uname -m 2>/dev/null) нет готового бинарника форка hrdns"
+		return 1
+	}
+	_sums="$TMP/fork-SHA256SUMS"
+	_bin="$TMP/fork-hrdns"
+	say "Скачиваю форк-ядро hrdns 1.0.0 ($_arch, ~11-13 МБ)"
+	fetch "$FORK_CORE_URL_BASE/SHA256SUMS" "$_sums" || { warn "не удалось скачать SHA256SUMS форка"; return 1; }
+	sed -i 's/\r$//' "$_sums" 2>/dev/null || true
+	fetch "$FORK_CORE_URL_BASE/bin/$_arch/hrdns" "$_bin" 300 || { warn "не удалось скачать бинарник форка"; return 1; }
+	_want=$(awk -v p="bin/$_arch/hrdns" '$2 == p { print $1; exit }' "$_sums")
+	[ -n "$_want" ] || { warn "в SHA256SUMS нет записи для bin/$_arch/hrdns"; return 1; }
+	_got=$(sha256sum "$_bin" | cut -c1-64)
+	[ "$_want" = "$_got" ] || { warn "SHA-256 форк-ядра не совпал с SHA256SUMS"; return 1; }
+	chmod 755 "$_bin" 2>/dev/null || true
+	if ! "$_bin" -v >/dev/null 2>&1; then
+		warn "скачанный бинарник форка не запускается на этой архитектуре"
+		return 1
+	fi
+	FORK_CORE_DL="$_bin"
+	return 0
+}
+
 CORE=""
+CORE_SOURCE=""
 if [ -n "$CORE_PATH" ]; then
 	[ -x "$CORE_PATH" ] || die "--core: файл не исполняемый: $CORE_PATH"
 	"$CORE_PATH" -v >/dev/null 2>&1 || die "--core: бинарник не запускается"
 	CORE=$CORE_PATH
+	CORE_SOURCE=explicit
 else
-	CORE=$(find_core 2>/dev/null || true)
-	if [ -z "$CORE" ] && [ "$NO_DEPS" = "0" ]; then
-		say "Резолвер не найден — ставлю пакет smartdns"
-		opkg_install smartdns || true
-		CORE=$(find_core 2>/dev/null || true)
+	case "$CORE_SOURCE" in
+		existing)
+			CORE=$(find_hrdns 2>/dev/null || true)
+			[ -n "$CORE" ] || CORE=$(find_smartdns 2>/dev/null || true)
+			[ -n "$CORE" ] && CORE_SOURCE=existing
+			;;
+		fork)
+			if download_fork_core; then
+				CORE=$FORK_CORE_DL
+				CORE_SOURCE=fork
+			fi
+			;;
+		opkg)
+			if [ "$NO_DEPS" = "0" ]; then
+				opkg_install smartdns || true
+			fi
+			CORE=$(find_smartdns 2>/dev/null || true)
+			[ -n "$CORE" ] && CORE_SOURCE=opkg
+			;;
+		auto|*)
+			CORE=$(find_hrdns 2>/dev/null || true)
+			if [ -n "$CORE" ]; then
+				CORE_SOURCE=existing
+			elif download_fork_core; then
+				CORE=$FORK_CORE_DL
+				CORE_SOURCE=fork
+			else
+				CORE=$(find_smartdns 2>/dev/null || true)
+				if [ -n "$CORE" ]; then
+					CORE_SOURCE=existing-smartdns
+				elif [ "$NO_DEPS" = "0" ]; then
+					say "Готового форк-ядра нет — ставлю generic smartdns"
+					opkg_install smartdns || true
+					CORE=$(find_smartdns 2>/dev/null || true)
+					[ -n "$CORE" ] && CORE_SOURCE=opkg
+				fi
+			fi
+			;;
+	esac
+	if [ -z "$CORE" ]; then
+		die "не удалось установить ядро. Укажите --core PATH, --core-source fork (aarch64/mipsel/mips) или --core-source opkg"
 	fi
-	[ -n "$CORE" ] || die "не найден hrdns/smartdns. Установите пакет hrdns (Hydra Route) или smartdns, либо укажите --core PATH"
 fi
 CORE_VER=$("$CORE" -v 2>/dev/null | head -n 1)
 case "$CORE_VER $CORE" in
 	*hrdns*) CORE_KIND=hrdns ;;
 	*) CORE_KIND=smartdns ;;
 esac
-say "Ядро: $CORE ($CORE_VER, тип $CORE_KIND)"
+say "Ядро: $CORE ($CORE_VER, тип $CORE_KIND, источник $CORE_SOURCE)"
 if [ "$CORE_KIND" != "hrdns" ]; then
 	warn "Выбран generic smartdns: страницы статистики/кэша/Query Log будут недоступны (нет stats-моста hrdns)."
 fi
@@ -402,6 +508,8 @@ chmod 755 "$INIT"
 		echo "FSD_WEB_SERVER='$WEB_SERVER'"
 		echo "FSD_CORE_KIND='$CORE_KIND'"
 		echo "FSD_CORE_BIN='$CORE_BIN'"
+		echo "FSD_CORE_SOURCE='$CORE_SOURCE'"
+		echo "FSD_CORE_VERSION='$CORE_VER'"
 		echo "FSD_INSTALLED_AT='$(date '+%Y-%m-%d %H:%M:%S')'"
 	} >"$ETC/instance.env"
 )
@@ -504,7 +612,7 @@ LAN_IP=$(ip -4 addr show 2>/dev/null | awk '/inet (192\.168\.|10\.|172\.(1[6-9]|
 [ -n "$LAN_IP" ] || LAN_IP="<IP-роутера>"
 
 echo
-echo "forksmartdns $VERSION установлен (ядро: $CORE_KIND, $WEB_SERVER)."
+echo "forksmartdns $VERSION установлен (ядро: $CORE_VER, тип $CORE_KIND, источник: $CORE_SOURCE, web: $WEB_SERVER)."
 echo
 echo "  Панель:        http://$LAN_IP:$UI_PORT/"
 echo "  DNS-услышитель: $DNS_BIND:$DNS_PORT (UDP/TCP)"
