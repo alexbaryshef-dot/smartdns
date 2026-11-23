@@ -163,6 +163,7 @@ else
 	fi
 	_ok=1
 	while IFS= read -r _line; do
+		_line=$(printf '%s' "$_line" | tr -d '\r')
 		case "$_line" in
 			''|'#'*) continue ;;
 		esac
