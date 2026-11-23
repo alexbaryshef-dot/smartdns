@@ -7,6 +7,9 @@
 
 Добавлено:
 
+- установка самого форк-ядра: готовый бинарник `hrdns` 1.0.0 (aarch64/mipsel/mips)
+  скачивается из истории репозитория с проверкой SHA-256; более новый уже
+  установленный `hrdns` имеет приоритет; generic `smartdns` — fallback;
 - изолированный экземпляр hrdns/smartdns: собственные каталоги `/opt/etc/forksmartdns`,
   `/opt/var/lib/forksmartdns`, `/opt/var/log/forksmartdns`,
   `/opt/var/run/forksmartdns`, `/opt/share/forksmartdns`, свой PID, конфиг, логи,

@@ -33,7 +33,9 @@ BUSYBOX=/path/to/busybox python3 tests/selftest.py
 - реальный HTTP через BusyBox httpd + CGI: cookie, CSRF, POST-only для
   изменяющих действий, статика, защита от path traversal;
 - `install.sh` → повторная установка (отказ) → `--upgrade` → `uninstall.sh`
-  с проверкой, что конфиг сохранился, а файлы удалены.
+  с проверкой, что конфиг сохранился, а файлы удалены;
+- установка форк-ядра из локального фида: скачивание, проверка SHA-256 и запись
+  `FSD_CORE_SOURCE=fork`.
 
 Заглушка ядра печатает `hrdns starting...` и живёт несколько секунд; она НЕ
 резолвит DNS и НЕ является smartdns.

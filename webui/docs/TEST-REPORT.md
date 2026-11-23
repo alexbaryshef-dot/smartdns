@@ -18,6 +18,7 @@
 | Python | 3.14 |
 | Node.js | 24.21 |
 | Ядро в тестах | скрипт-заглушка, печатающий `hrdns starting...` |
+| Форк-бинарник | скачан `bin/aarch64-k3.10/hrdns` 1.0.0; SHA-256 сверен с `SHA256SUMS`; ELF AArch64; **не исполнялся** (нет aarch64-среды) |
 | Реальный smartdns/hrdns | не запускался |
 | aarch64/mips | не проверялись |
 
@@ -57,11 +58,24 @@ IP/CIDR/домен/MAC/int/yesno/speed, форматирование, экран
 - `json_str_file` терял завершающий перевод строки;
 - путь к `api.cgi` для BusyBox httpd (`/cgi-bin/`).
 
-### 3. Итоговый воспроизводимый self-test
+### 3. Проверка установки форк-ядра
+
+- `bin/aarch64-k3.10/hrdns` (11 666 256 байт) и `bin/mipselsf-k3.4/hrdns`,
+  `bin/mipssf-k3.4/hrdns` из коммита `fab7d126` сверены с `SHA256SUMS`:
+  SHA-256 совпадает;
+- aarch64-бинарник — ELF64 AArch64; строки содержат `1.0.0`, `ui-listen`,
+  `ui-flush-seconds`, `server-quic`, `--is-quic-supported`;
+- маршруты stats-моста 1.0.0 совпадают с 1.2.3: `/api/stats/*`, `/api/domain`,
+  `/api/cache/*`, `/api/upstream-server`, `/api/log/level`, `/api/service/restart`;
+- отдельный тест `fork_install_test` (локальный HTTP-фид с поддельным
+  бинарником и настоящей проверкой SHA-256) — **PASS**: установщик скачал,
+  проверил, поставил и записал `FSD_CORE_SOURCE=fork`.
+
+### 4. Итоговый воспроизводимый self-test
 
 ```
 BUSYBOX=... python3 tests/selftest.py
-PASS=42 FAIL=0
+PASS=45 FAIL=0
 ```
 
 Состав:
@@ -73,6 +87,8 @@ PASS=42 FAIL=0
   POST-only, static index, path traversal, logout, 401.
 - **Install, 9 проверок**: install, config, token, API, init, reinstall refused,
   upgrade + config preserved, uninstall, removal.
+- **Fork core, 3 проверки**: скачивание из локального фида с настоящей
+  SHA-256-проверкой, установка бинарника, запись `FSD_CORE_SOURCE=fork`.
 
 Логи прогона сохранены в истории разработки; команда воспроизводится на любой
 машине с BusyBox+Python.
@@ -80,6 +96,8 @@ PASS=42 FAIL=0
 ## Что не проверено (критично для статуса stable)
 
 1. Реальный запуск/остановка/перезапуск `hrdns`/`smartdns` и реальные DNS-ответы.
+   Скачанный форк-бинарник 1.0.0 проверен по SHA-256 и ELF, но не исполнялся
+   на aarch64.
 2. DoT/DoH/HTTP3/DoQ, TLS-сертификаты, цепочки CA.
 3. Stats-мост настоящего ядра (проверена только деградация при его отсутствии).
 4. lighttpd-режим (запускался только BusyBox httpd).
