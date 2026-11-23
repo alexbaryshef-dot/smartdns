@@ -1,0 +1,287 @@
+#!/bin/sh
+# forksmartdns — isolated service init script (BusyBox ash, no systemd).
+#
+# PRO-TITLE: forksmartdns — SmartDNS + WebUI
+# PRO-DESC: Изолированный экземпляр SmartDNS/HRDNS с панелью управления.
+### BEGIN INIT INFO
+# Provides:          forksmartdns
+# Required-Start:
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: forksmartdns resolver and WebUI
+### END INIT INFO
+
+_self_dir=$(cd "$(dirname "$0")" && pwd)
+FORKSMDNS_PREFIX=$(cd "$_self_dir/../.." && pwd)
+export FORKSMDNS_PREFIX
+
+_lib="$FORKSMDNS_PREFIX/share/forksmartdns/lib"
+if [ ! -r "$_lib/common.sh" ]; then
+	echo "forksmartdns: cannot find $_lib/common.sh" >&2
+	exit 1
+fi
+. "$_lib/common.sh"
+. "$_lib/service.sh"
+. "$_lib/coreapi.sh"
+
+PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+LOCKDIR="$FSD_RUN/lock"
+LOCKED=0
+
+acquire_lock() {
+	mkdir -p "$FSD_RUN" 2>/dev/null || true
+	_i=0
+	while [ "$_i" -lt 15 ]; do
+		if mkdir "$LOCKDIR" 2>/dev/null; then
+			echo $$ >"$LOCKDIR/pid"
+			LOCKED=1
+			return 0
+		fi
+		# stale lock?
+		_lp=$(cat "$LOCKDIR/pid" 2>/dev/null || true)
+		if [ -n "$_lp" ] && ! kill -0 "$_lp" 2>/dev/null; then
+			rm -rf "$LOCKDIR"
+			continue
+		fi
+		sleep 1
+		_i=$((_i + 1))
+	done
+	return 1
+}
+
+release_lock() {
+	[ "$LOCKED" = "1" ] && rm -rf "$LOCKDIR"
+	LOCKED=0
+}
+
+trap 'release_lock' EXIT INT TERM
+
+log_start_error() {
+	printf '%s [init] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$FSD_WEB_LOG" 2>/dev/null || true
+}
+
+ensure_dirs() {
+	for _d in "$FSD_VAR" "$FSD_LOG" "$FSD_RUN" "$FSD_VAR/tmp" "$FSD_VAR/ui" "$FSD_LISTS"; do
+		mkdir -p "$_d" 2>/dev/null || true
+	done
+	chmod 700 "$FSD_RUN" 2>/dev/null || true
+	chmod 750 "$FSD_VAR" "$FSD_LOG" 2>/dev/null || true
+}
+
+wait_core_pid() {
+	_i=0
+	while [ "$_i" -lt 12 ]; do
+		pid_alive "$(pid_from_file "$FSD_PID" 2>/dev/null || echo 0)" && return 0
+		sleep 1
+		_i=$((_i + 1))
+	done
+	return 1
+}
+
+start_core() {
+	if service_is_running; then
+		return 0
+	fi
+	if [ ! -x "$FSD_CORE_BIN" ]; then
+		log_start_error "core binary is not executable: $FSD_CORE_BIN"
+		echo "forksmartdns: core binary not found: $FSD_CORE_BIN" >&2
+		return 1
+	fi
+	if [ ! -f "$FSD_CONF" ]; then
+		log_start_error "config not found: $FSD_CONF"
+		echo "forksmartdns: config not found: $FSD_CONF" >&2
+		return 1
+	fi
+	rm -f "$FSD_PID"
+	(
+		cd "$FSD_VAR" || exit 1
+		"$FSD_CORE_BIN" -c "$FSD_CONF" -p "$FSD_PID" >>"$FSD_WEB_LOG" 2>&1
+	)
+	_rc=$?
+	if [ "$_rc" -ne 0 ]; then
+		log_start_error "core exited with $_rc"
+		return 1
+	fi
+	if ! wait_core_pid; then
+		log_start_error "core did not create a live pid file"
+		return 1
+	fi
+	now_epoch >"$FSD_RUN/started-at"
+	return 0
+}
+
+start_web() {
+	if web_is_running; then
+		return 0
+	fi
+	rm -f "$FSD_WEB_PID"
+	case "$FSD_WEB_SERVER" in
+		busybox)
+			_bb=$(command -v busybox 2>/dev/null || true)
+			[ -n "$_bb" ] || return 1
+			"$_bb" httpd -f -p "$FSD_UI_BIND:$FSD_UI_PORT" -h "$FSD_WWW" >>"$FSD_WEB_LOG" 2>&1 &
+			_wpid=$!
+			echo "$_wpid" >"$FSD_WEB_PID"
+			;;
+		lighttpd|*)
+			_lt=$(command -v lighttpd 2>/dev/null || true)
+			[ -n "$_lt" ] || _lt="$FORKSMDNS_PREFIX/sbin/lighttpd"
+			[ -x "$_lt" ] || { log_start_error "lighttpd not found"; return 1; }
+			if ! "$_lt" -t -f "$FSD_ETC/lighttpd.conf" >>"$FSD_WEB_LOG" 2>&1; then
+				log_start_error "lighttpd config test failed"
+				return 1
+			fi
+			"$_lt" -f "$FSD_ETC/lighttpd.conf" >>"$FSD_WEB_LOG" 2>&1
+			_rc=$?
+			[ "$_rc" -eq 0 ] || { log_start_error "lighttpd exited with $_rc"; return 1; }
+			;;
+	esac
+	wait_tcp 127.0.0.1 "$FSD_UI_PORT" 10 || {
+		log_start_error "web server did not listen on port $FSD_UI_PORT"
+		return 1
+	}
+	return 0
+}
+
+stop_core() {
+	_pid=$(pid_from_file "$FSD_PID" 2>/dev/null || true)
+	if [ -z "$_pid" ] || ! pid_alive "$_pid"; then
+		rm -f "$FSD_PID"
+		return 0
+	fi
+	kill "$_pid" 2>/dev/null
+	_i=0
+	while [ "$_i" -lt 10 ] && pid_alive "$_pid"; do
+		sleep 1
+		_i=$((_i + 1))
+	done
+	if pid_alive "$_pid"; then
+		kill -9 "$_pid" 2>/dev/null
+		sleep 1
+	fi
+	rm -f "$FSD_PID" "$FSD_RUN/started-at"
+	return 0
+}
+
+stop_web() {
+	_pid=$(pid_from_file "$FSD_WEB_PID" 2>/dev/null || true)
+	if [ -n "$_pid" ] && pid_alive "$_pid"; then
+		kill "$_pid" 2>/dev/null
+		_i=0
+		while [ "$_i" -lt 5 ] && pid_alive "$_pid"; do
+			sleep 1
+			_i=$((_i + 1))
+		done
+		pid_alive "$_pid" && kill -9 "$_pid" 2>/dev/null
+	fi
+	rm -f "$FSD_WEB_PID"
+	return 0
+}
+
+start() {
+	acquire_lock || { echo "forksmartdns: another operation is in progress" >&2; return 1; }
+	ensure_dirs
+	if ! start_core; then
+		stop_core
+		release_lock
+		return 1
+	fi
+	if ! start_web; then
+		stop_web
+		stop_core
+		release_lock
+		return 1
+	fi
+	if grep -qE '^[ \t]*ui-enable[ \t]+yes' "$FSD_CONF" 2>/dev/null; then
+		_i=0
+		while [ "$_i" -lt 15 ]; do
+			core_api_ok && break
+			sleep 1
+			_i=$((_i + 1))
+		done
+		if ! core_api_ok; then
+			log_start_error "stats bridge did not become ready"
+		fi
+	fi
+	echo "forksmartdns started (pid $(pid_from_file "$FSD_PID" 2>/dev/null || echo '?'))"
+	release_lock
+	return 0
+}
+
+stop() {
+	acquire_lock || { echo "forksmartdns: another operation is in progress" >&2; return 1; }
+	stop_web
+	stop_core
+	echo "forksmartdns stopped"
+	release_lock
+	return 0
+}
+
+status() {
+	if service_is_running; then
+		echo "core: running (pid $(service_pid), uptime $(service_uptime)s)"
+	else
+		echo "core: stopped"
+	fi
+	if web_is_running; then
+		echo "web:  running (pid $(web_pid))"
+	else
+		echo "web:  stopped"
+	fi
+	if service_enabled; then
+		echo "autostart: enabled"
+	else
+		echo "autostart: disabled"
+	fi
+}
+
+enable_autostart() {
+	_enabled=0
+	if [ -d "$FORKSMDNS_PREFIX/etc/rc.d" ]; then
+		ln -sf "$FSD_INIT" "$FORKSMDNS_PREFIX/etc/rc.d/S99forksmartdns" 2>/dev/null && _enabled=1
+		ln -sf "$FSD_INIT" "$FORKSMDNS_PREFIX/etc/rc.d/K10forksmartdns" 2>/dev/null || true
+	fi
+	_rclocal="$FORKSMDNS_PREFIX/etc/rc.local"
+	touch "$_rclocal" 2>/dev/null || true
+	if ! grep -q 'S99forksmartdns\|forksmartdns/forksmartdns\|init.d/forksmartdns' "$_rclocal" 2>/dev/null; then
+		echo "[ -x $FSD_INIT ] && $FSD_INIT start >/dev/null 2>&1" >>"$_rclocal"
+		_enabled=1
+	fi
+	chmod +x "$_rclocal" 2>/dev/null || true
+	[ "$_enabled" = "1" ] && echo "autostart enabled" || echo "autostart already enabled"
+	return 0
+}
+
+disable_autostart() {
+	rm -f "$FORKSMDNS_PREFIX/etc/rc.d/S99forksmartdns" "$FORKSMDNS_PREFIX/etc/rc.d/K10forksmartdns" 2>/dev/null || true
+	_rclocal="$FORKSMDNS_PREFIX/etc/rc.local"
+	if [ -f "$_rclocal" ]; then
+		_tmp="$_rclocal.tmp.$$"
+		grep -v 'init.d/forksmartdns' "$_rclocal" >"$_tmp" 2>/dev/null || true
+		mv "$_tmp" "$_rclocal" 2>/dev/null || rm -f "$_tmp"
+	fi
+	echo "autostart disabled"
+	return 0
+}
+
+case "$1" in
+	start) start ;;
+	stop) stop ;;
+	restart)
+		stop
+		sleep 1
+		start
+		;;
+	reload) stop; sleep 1; start ;;
+	status) status ;;
+	enable) enable_autostart ;;
+	disable) disable_autostart ;;
+	*)
+		echo "usage: $0 {start|stop|restart|reload|status|enable|disable}" >&2
+		exit 1
+		;;
+esac
+exit $?

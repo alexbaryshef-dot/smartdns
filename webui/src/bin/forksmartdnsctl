@@ -1,0 +1,184 @@
+#!/bin/sh
+# forksmartdnsctl — CLI for the isolated forksmartdns instance.
+# POSIX/BusyBox ash. Installed under /opt/share/forksmartdns/bin and
+# symlinked as /opt/bin/forksmartdnsctl.
+
+_self=$(cd "$(dirname "$0")" && pwd)
+if [ -z "${FORKSMDNS_PREFIX:-}" ]; then
+	FORKSMDNS_PREFIX=$(cd "$_self/../../.." && pwd)
+fi
+export FORKSMDNS_PREFIX
+
+_lib="$FORKSMDNS_PREFIX/share/forksmartdns/lib"
+. "$_lib/common.sh"
+. "$_lib/auth.sh"
+. "$_lib/config.sh"
+. "$_lib/service.sh"
+. "$_lib/backup.sh"
+
+need_root() {
+	if [ "$(id -u 2>/dev/null || echo 1)" = "0" ] || [ "${FORKSMDNS_ALLOW_NONROOT:-0}" = "1" ]; then
+		return 0
+	fi
+	fsd_die "запускайте под root" 1
+}
+
+cmd=${1:-help}
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+	version)
+		echo "forksmartdnsctl $FSD_VERSION"
+		echo "core: $(service_core_version 2>/dev/null || echo 'not installed')"
+		;;
+	paths)
+		echo "prefix:  $FSD_PREFIX"
+		echo "etc:     $FSD_ETC"
+		echo "var:     $FSD_VAR"
+		echo "log:     $FSD_LOG"
+		echo "run:     $FSD_RUN"
+		echo "www:     $FSD_WWW"
+		echo "conf:    $FSD_CONF"
+		echo "backups: $FSD_BACKUPS"
+		;;
+	start|stop|restart|reload|status|enable|disable)
+		need_root
+		"$FSD_INIT" "$cmd"
+		;;
+	check)
+		need_root
+		_f=${1:-$FSD_CONF}
+		[ -f "$_f" ] || fsd_die "конфигурация не найдена: $_f"
+		_out="$FSD_RUN/check.$$"
+		run_static_validation "$_f" "$_out"
+		_e=$(validation_error_count "$_out")
+		_w=$(validation_warning_count "$_out")
+		while IFS='	' read -r _sev _ln _msg; do
+			[ -n "$_sev" ] || continue
+			case "$_sev" in
+				E) echo "ERROR  line $_ln: $_msg" ;;
+				W) echo "WARN   line $_ln: $_msg" ;;
+			esac
+		done <"$_out"
+		rm -f "$_out"
+		echo "статическая проверка: ошибок $_e, предупреждений $_w"
+		[ "$_e" -eq 0 ] || exit 1
+		need_root
+		_vlog="$FSD_RUN/runtime-check.$$"
+		if runtime_validate "$_f" "$_vlog"; then
+			echo "пробный запуск ядра: OK"
+			rm -f "$_vlog" 2>/dev/null || true
+			exit 0
+		else
+			echo "пробный запуск ядра: FAIL"
+			config_test_summary "$_vlog" | tail -n 20
+			rm -f "$_vlog" 2>/dev/null || true
+			exit 1
+		fi
+		;;
+	backup)
+		need_root
+		_b=$(make_backup "${1:-manual}") || fsd_die "не удалось создать резервную копию" 1
+		echo "backup: $FSD_BACKUPS/$_b"
+		;;
+	list-backups)
+		backup_dir_ensure || true
+		for _f in $(ls -1t "$FSD_BACKUPS"/*.tgz 2>/dev/null); do
+			[ -f "$_f" ] || continue
+			printf '%s  %s  %s\n' "$(basename "$_f")" \
+				"$(wc -c <"$_f" | tr -d ' ')" "$(backup_reason "$_f")"
+		done
+		;;
+	restore)
+		need_root
+		[ -n "${1:-}" ] || fsd_die "usage: forksmartdnsctl restore NAME" 1
+		if [ -f "$1" ]; then
+			_arc=$1
+		else
+			_arc=$(backup_path "$1" 2>/dev/null) || fsd_die "некорректное имя архива" 1
+		fi
+		if restore_archive "$_arc"; then
+			echo "restored: $(basename "$_arc")"
+		else
+			echo "restore failed: $RESTORE_ERROR" >&2
+			[ -n "${RESTORE_DETAIL:-}" ] && echo "$RESTORE_DETAIL" >&2
+			exit 1
+		fi
+		;;
+	passwd)
+		need_root
+		if [ "${1:-}" = "--stdin" ]; then
+			IFS= read -r _p1 || true
+			IFS= read -r _p2 || true
+		else
+			printf 'Новый пароль администратора: '
+			if command -v stty >/dev/null 2>&1; then stty -echo 2>/dev/null || true; fi
+			IFS= read -r _p1 || true
+			echo
+			printf 'Повторите пароль: '
+			IFS= read -r _p2 || true
+			if command -v stty >/dev/null 2>&1; then stty echo 2>/dev/null || true; fi
+			echo
+		fi
+		[ -n "$_p1" ] || fsd_die "пустой пароль" 1
+		[ "$_p1" = "$_p2" ] || fsd_die "пароли не совпадают" 1
+		[ "${#_p1}" -ge 8 ] || fsd_die "пароль короче 8 символов" 1
+		auth_set_password "$_p1"
+		rm -f "$FSD_ETC/setup-token" 2>/dev/null || true
+		echo "пароль обновлён"
+		;;
+	setup-token)
+		need_root
+		if [ -r "$FSD_ETC/setup-token" ]; then
+			cat "$FSD_ETC/setup-token"
+		else
+			echo "setup token is not present (initial setup already completed)"
+			exit 1
+		fi
+		;;
+	diagnose)
+		echo "== forksmartdns diagnose =="
+		"$FSD_INIT" status
+		echo "core binary: $FSD_CORE_BIN"
+		[ -x "$FSD_CORE_BIN" ] && "$FSD_CORE_BIN" -v 2>/dev/null | head -n 2
+		echo "bridge: $(core_bridge_state)"
+		if [ -f "$FSD_CONF" ]; then
+			_out="$FSD_RUN/diag.$$"
+			run_static_validation "$FSD_CONF" "$_out"
+			echo "config errors: $(validation_error_count "$_out"), warnings: $(validation_warning_count "$_out")"
+			rm -f "$_out"
+		fi
+		echo "ui port $FSD_UI_PORT: $(port_listening "$FSD_UI_PORT" tcp && echo listening || echo free)"
+		echo "dns port $FSD_DNS_PORT: $(port_listening "$FSD_DNS_PORT" udp && echo listening || echo free)"
+		echo "nftables: $(command -v nft >/dev/null 2>&1 && echo present || echo absent)"
+		echo "ipset: $(command -v ipset >/dev/null 2>&1 && echo present || echo absent)"
+		;;
+	help|-h|--help|"")
+		cat <<EOF
+forksmartdnsctl — управление изолированным экземпляром forksmartdns
+
+Команды:
+  version                 версии WebUI и ядра
+  paths                   все пути экземпляра
+  status                  состояние службы
+  start|stop|restart      управление службой
+  enable|disable          автозапуск
+  check [config]          статическая проверка + пробный запуск ядра
+  backup [reason]         создать резервную копию
+  list-backups            список копий
+  restore NAME            восстановить копию
+  passwd [--stdin]        сменить пароль администратора
+  setup-token             показать токен первичной настройки
+  diagnose                диагностика
+
+Файлы:
+  $FSD_CONF
+  $FSD_LOG/
+  $FSD_BACKUPS/
+EOF
+		;;
+	*)
+		echo "unknown command: $cmd (try: forksmartdnsctl help)" >&2
+		exit 1
+		;;
+esac

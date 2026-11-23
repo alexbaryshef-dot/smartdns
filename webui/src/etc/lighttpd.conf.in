@@ -1,0 +1,35 @@
+# forksmartdns WebUI — dedicated lighttpd instance (isolated config and pid).
+server.document-root = "@WWW@"
+server.port = @UI_PORT@
+server.bind = "@UI_BIND@"
+server.pid-file = "@RUN@/web.pid"
+server.errorlog = "@LOG@/web.log"
+server.modules = ("mod_cgi", "mod_setenv")
+server.max-request-size = 8388608
+server.max-connections = 64
+server.upload-dirs = ("@VAR@/tmp")
+server.follow-symlink = "disable"
+index-file.names = ("index.html")
+
+mimetype.assign = (
+	".html" => "text/html; charset=utf-8",
+	".css" => "text/css; charset=utf-8",
+	".js" => "text/javascript; charset=utf-8",
+	".json" => "application/json; charset=utf-8",
+	".svg" => "image/svg+xml",
+	".png" => "image/png",
+	".ico" => "image/x-icon",
+	".woff2" => "font/woff2",
+	".tsv" => "text/tab-separated-values; charset=utf-8",
+	".txt" => "text/plain; charset=utf-8"
+)
+
+cgi.assign = (".cgi" => "/bin/sh")
+
+setenv.add-response-header = (
+	"X-Content-Type-Options" => "nosniff",
+	"X-Frame-Options" => "DENY",
+	"Referrer-Policy" => "no-referrer",
+	"Permissions-Policy" => "geolocation=(), camera=(), microphone=()",
+	"Content-Security-Policy" => "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+)

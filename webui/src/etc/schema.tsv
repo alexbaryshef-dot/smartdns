@@ -1,0 +1,65 @@
+# forksmartdns WebUI — editable global settings schema.
+# Columns: key, type, min, max, enum, category, label(RU), default, hint(RU)
+# Tab separated. The same file is used by the CGI validator and the browser.
+server-name	string	-	-	-	general	Имя сервера	forksmartdns	Имя, которое ядро сообщает в логах и API
+resolv-hostname	yesno	-	-	-	general	Резолвить имя роутера	yes	Добавлять локальное имя хоста в ответы
+mdns-lookup	yesno	-	-	-	general	Поиск mDNS (.local)	no	Резолвить имена локальной сети через mDNS
+local-ptr-enable	yesno	-	-	-	general	Локальные PTR-запросы	yes	Отвечать на PTR для локальных адресов
+expand-ptr-from-address	yesno	-	-	-	general	Строить PTR из address	no	Генерировать PTR-записи из правил address
+tcp-idle-time	int	0	3600	-	general	TCP idle, сек	120	Таймаут простоя TCP-соединения
+max-query-limit	int	0	1000000	-	general	Лимит запросов в секунду	0	0 — без ограничения
+socket-buff-size	size	0	8388608	-	general	Буфер сокета	0	0 — значение ядра по умолчанию
+response-mode	response	-	-	first-ping|fastest-ip|fastest-response	general	Режим ответа	first-ping	Как выбирать адрес из ответов upstream
+speed-check-mode	speed	-	-	-	general	Проверка скорости	ping,tcp:443	ping, tcp:443, tcp-syn:443 или none через запятую
+max-reply-ip-num	int	1	16	-	general	Максимум IP в ответе	8	Ограничение количества адресов в ответе
+force-AAAA-SOA	yesno	-	-	-	general	AAAA → SOA	no	Отвечать SOA на AAAA-запросы
+force-no-CNAME	yesno	-	-	-	general	Убирать CNAME	no	Не возвращать CNAME клиентам
+acl-enable	yesno	-	-	-	security	ACL	no	Включить списки контроля доступа
+ca-file	path	-	-	-	security	CA-файл		Файл корневых сертификатов для DoH/DoT
+ca-path	path	-	-	-	security	CA-каталог		Каталог с сертификатами
+user	string	-	-	-	security	Пользователь		Сбросить привилегии после старта
+edns-client-subnet	ipcidr	-	-	-	security	EDNS Client Subnet		Подставлять подсеть клиента в ECS
+edns-client-subnet-strip	yesno	-	-	-	security	Скрывать ECS	no	Удалять ECS из запросов к upstream
+cache-size	int	-1	10000000	-	cache	Размер кэша, записей	4096	-1 — авто
+cache-mem-size	size	0	1073741824	-	cache	Лимит памяти кэша	0	0 — без отдельного лимита
+cache-persist	yesno	-	-	-	cache	Сохранять кэш на диск	yes	Переживает перезапуск
+cache-checkpoint-time	int	0	604800	-	cache	Период чекпоинта, сек	600	Как часто писать кэш на диск
+cache-file	path	-	-	-	cache	Файл кэша		Путь к файлу кэша
+prefetch-domain	yesno	-	-	-	cache	Prefetch доменов	no	Обновлять популярные записи заранее
+serve-expired	yesno	-	-	-	cache	Отдавать просроченное	yes	Отвечать из кэша после истечения TTL
+serve-expired-ttl	int	0	604800	-	cache	TTL просроченного	86400	Сколько хранить просроченные записи
+serve-expired-reply-ttl	int	0	86400	-	cache	Reply TTL просроченного	3	TTL в ответе для просроченных данных
+serve-expired-prefetch-time	int	0	86400	-	cache	Prefetch после истечения	0	0 — выключено
+dualstack-ip-selection	yesno	-	-	-	selection	Выбор IPv4/IPv6	yes	Выбирать более быстрый стек
+dualstack-ip-selection-threshold	int	0	1000	-	selection	Порог dualstack	0	Порог выбора стека
+dualstack-ip-allow-force-AAAA	yesno	-	-	-	selection	Разрешить force AAAA	no	Разрешать AAAA при dualstack
+rr-ttl	int	0	2147483647	-	ttl	TTL всех записей	0	0 — не переопределять
+rr-ttl-min	int	0	2147483647	-	ttl	Минимальный TTL	0	0 — не переопределять
+rr-ttl-max	int	0	2147483647	-	ttl	Максимальный TTL	0	0 — не переопределять
+rr-ttl-reply-max	int	0	2147483647	-	ttl	Максимум TTL в ответе	0	0 — не переопределять
+local-ttl	int	0	2147483647	-	ttl	TTL локальных записей	0	0 — значение ядра
+log-level	loglevel	-	-	off|fatal|error|warn|notice|info|debug	log	Уровень логирования	notice	Чем выше, тем подробнее
+log-file	path	-	-	-	log	Файл лога		Основной лог ядра
+log-size	size	-	-	-	log	Размер файла лога	256k	Ротация по размеру
+log-num	int	0	1024	-	log	Файлов лога	2	0 — без ротации
+log-color	yesno	-	-	-	log	Цветной лог	no	ANSI-цвета в консоли
+log-console	yesno	-	-	-	log	Лог в консоль	no	Дублировать в stdout
+log-syslog	yesno	-	-	-	log	Лог в syslog	no	Отправлять в syslog
+audit-enable	yesno	-	-	-	audit	Журнал запросов	yes	Нужен для страницы Query Log
+audit-SOA	yesno	-	-	-	audit	Писать SOA-ответы	no	Включать в журнал заблокированные ответы
+audit-file	path	-	-	-	audit	Файл журнала		Текстовый audit-лог
+audit-size	size	-	-	-	audit	Размер журнала	512k	Ротация по размеру
+audit-num	int	0	1024	-	audit	Файлов журнала	2	0 — без ротации
+audit-console	yesno	-	-	-	audit	Журнал в консоль	no	Дублировать в stdout
+audit-syslog	yesno	-	-	-	audit	Журнал в syslog	no	Отправлять в syslog
+ipset-timeout	yesno	-	-	-	security	IPSet timeout по TTL	no	Удалять элементы ipset по TTL
+nftset-timeout	yesno	-	-	-	security	NFTSet timeout по TTL	no	Требует nftables; на Keenetic недоступно
+nftset-debug	yesno	-	-	-	security	NFTSet debug	no	Диагностика nftset
+ui-enable	yesno	-	-	-	ui	Stats-мост ядра	yes	Встроенный HTTP-API статистики hrdns
+ui-listen	string	-	-	-	ui	Адрес stats-моста	127.0.0.1:36390	Только loopback; не менять без необходимости
+ui-data-dir	path	-	-	-	ui	Каталог данных моста		Хранилище журнала и статистики
+ui-days	int	1	30	-	ui	Хранить журнал, дней	7	Срок хранения query log
+ui-max-mb	int	16	1048576	-	ui	Лимит данных моста, МБ	64	Максимальный размер хранилища
+ui-flush-seconds	int	60	3600	-	ui	Период сброса, сек	60	Как часто мост пишет на диск
+debug-save-fail-packet	yesno	-	-	-	debug	Сохранять неудачные пакеты	no	Только для диагностики
+resolv-file	path	-	-	-	debug	resolv.conf		Файл со списком upstream
