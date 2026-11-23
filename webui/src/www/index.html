@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>forksmartdns</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app" id="app">
+	<aside class="sidebar">
+		<div class="brand">
+			<div class="brand-mark">fs</div>
+			<div>
+				<div class="brand-title">forksmartdns</div>
+				<div class="brand-sub" id="brand-sub">изолированный SmartDNS</div>
+			</div>
+		</div>
+		<nav class="nav" id="nav" aria-label="Разделы"></nav>
+		<div class="sidebar-foot">
+			<div id="sidebar-status" class="small">—</div>
+			<div class="row" style="margin-top:8px">
+				<button class="btn btn-ghost btn-sm" id="btn-password" type="button">Пароль</button>
+				<button class="btn btn-ghost btn-sm" id="btn-logout" type="button">Выйти</button>
+			</div>
+		</div>
+	</aside>
+	<main class="main">
+		<div class="topbar">
+			<div class="grow">
+				<h1 id="page-title">Обзор</h1>
+				<div class="sub" id="page-sub"></div>
+			</div>
+			<div class="row" id="top-actions"></div>
+		</div>
+		<div id="view" aria-live="polite">
+			<div class="card"><div class="skeleton" style="width:40%"></div></div>
+		</div>
+	</main>
+</div>
+
+<div id="login" class="login-overlay hidden">
+	<div class="login-card" id="login-card"></div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toasts"></div>
+
+<noscript>
+	<div class="login-overlay">
+		<div class="login-card">
+			<h1>Нужен JavaScript</h1>
+			<p>Панель управления требует включённого JavaScript. API доступен по адресу
+			<code>api.cgi</code> и защищён сессией.</p>
+		</div>
+	</div>
+</noscript>
+
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
